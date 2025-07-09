@@ -4,3 +4,6 @@ torchvision
 matplotlib
 tqdm
 datasets
+requests
+os
+zipfile
