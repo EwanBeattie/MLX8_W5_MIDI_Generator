@@ -4,4 +4,4 @@ __pycache__
 wandb/
 *.zip
 ChoralSingingDataset/
-processed_data/
+processed_data_compressed/

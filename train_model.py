@@ -1,0 +1,188 @@
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from asteroid.models import BaseModel
+from asteroid.losses import PITLossWrapper, pairwise_neg_sisdr
+from pathlib import Path
+import random
+from tqdm import tqdm
+
+def load_model():
+    """Load the customized ConvTasNet model for SATB separation."""
+    print("Loading ConvTasNet model for training...")
+    
+    # Load base model structure
+    model = BaseModel.from_pretrained("JorisCos/ConvTasNet_Libri2Mix_sepclean_16k")
+    
+    # Modify for 4 sources (same as in models.py)
+    old_output = model.masker.mask_net[1]
+    
+    # Update n_src parameter for 4 sources (SATB)
+    model.masker.n_src = 4
+    
+    scale = 4 // 2
+    new_out_channels = old_output.out_channels * scale
+
+    model.masker.mask_net[1] = torch.nn.Conv1d(
+        in_channels=old_output.in_channels,
+        out_channels=new_out_channels,
+        kernel_size=old_output.kernel_size[0],
+        stride=old_output.stride[0],
+        padding=old_output.padding[0],
+        bias=old_output.bias is not None
+    )
+    
+    # Initialize new layer weights
+    torch.nn.init.xavier_uniform_(model.masker.mask_net[1].weight)
+    
+    # Load initial weights if available
+    checkpoint_path = "checkpoints/convtasnet_satb_init.pth"
+    if Path(checkpoint_path).exists():
+        model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
+        print(f"✅ Loaded initial weights from {checkpoint_path}")
+    
+    return model
+
+class SATBDataset(Dataset):
+    """Dataset class for SATB audio chunks."""
+    
+    def __init__(self, file_list, chunks_dir):
+        self.file_list = file_list
+        self.chunks_dir = chunks_dir
+    
+    def __len__(self):
+        return len(self.file_list)
+    
+    def __getitem__(self, idx):
+        filename = self.file_list[idx]
+        chunk_data = torch.load(self.chunks_dir / filename)
+        
+        # Convert int8 to float
+        mixed = chunk_data['mixed'].float() / 127.0
+        sources = chunk_data['sources'].float() / 127.0
+        
+        return mixed, sources
+
+def load_training_data():
+    """Load training and validation data."""
+    print("Loading training data...")
+    
+    train_files = torch.load("processed_data_compressed/train_split.pt")
+    val_files = torch.load("processed_data_compressed/val_split.pt")
+    chunks_dir = Path("processed_data_compressed/chunks")
+    
+    print(f"Training chunks: {len(train_files)}")
+    print(f"Validation chunks: {len(val_files)}")
+    
+    # Create datasets
+    train_dataset = SATBDataset(train_files, chunks_dir)
+    val_dataset = SATBDataset(val_files, chunks_dir)
+    
+    return train_dataset, val_dataset
+
+def train_model():
+    """Fine-tune the ConvTasNet model on SATB data."""
+    print("🎵 Fine-tuning ConvTasNet for SATB Separation")
+    print("=" * 50)
+    
+    # Setup
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+    
+    # Load model and data
+    model = load_model().to(device)
+    train_dataset, val_dataset = load_training_data()
+    
+    # Training parameters
+    learning_rate = 1e-4
+    num_epochs = 10
+    batch_size = 4  # Small batch size for memory efficiency
+    
+    # Create DataLoaders
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=batch_size, 
+        shuffle=True, 
+        num_workers=0  # Set to 0 to avoid multiprocessing issues
+    )
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=batch_size, 
+        shuffle=False, 
+        num_workers=0
+    )
+    
+    # Optimizer and loss
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    loss_func = PITLossWrapper(pairwise_neg_sisdr, pit_from="pw_mtx")
+    
+    print(f"Training parameters:")
+    print(f"  Learning rate: {learning_rate}")
+    print(f"  Epochs: {num_epochs}")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Train batches: {len(train_loader)}")
+    print(f"  Val batches: {len(val_loader)}")
+    
+    # Training loop
+    for epoch in range(num_epochs):
+        print(f"\n📈 Epoch {epoch + 1}/{num_epochs}")
+        
+        # Training phase
+        model.train()
+        train_loss = 0
+        train_batches = 0
+        
+        for mixed, sources in tqdm(train_loader, desc="Training", leave=False):
+            mixed = mixed.to(device)
+            sources = sources.to(device)
+            
+            # Forward pass
+            optimizer.zero_grad()
+            separated = model(mixed)
+            
+            # Compute loss
+            loss = loss_func(separated, sources)
+            
+            # Backward pass
+            loss.backward()
+            optimizer.step()
+            
+            train_loss += loss.item()
+            train_batches += 1
+        
+        avg_train_loss = train_loss / train_batches
+        
+        # Validation phase
+        model.eval()
+        val_loss = 0
+        val_batches = 0
+        
+        with torch.no_grad():
+            for mixed, sources in tqdm(val_loader, desc="Validation", leave=False):
+                mixed = mixed.to(device)
+                sources = sources.to(device)
+                
+                separated = model(mixed)
+                loss = loss_func(separated, sources)
+                
+                val_loss += loss.item()
+                val_batches += 1
+        
+        avg_val_loss = val_loss / val_batches
+        
+        print(f"   Train Loss: {avg_train_loss:.4f}")
+        print(f"   Val Loss: {avg_val_loss:.4f}")
+        
+        # Save checkpoint every few epochs
+        if (epoch + 1) % 2 == 0:
+            checkpoint_path = f"checkpoints/convtasnet_satb_epoch_{epoch + 1}.pth"
+            torch.save(model.state_dict(), checkpoint_path)
+            print(f"   💾 Saved checkpoint: {checkpoint_path}")
+    
+    # Save final model
+    final_path = "checkpoints/convtasnet_satb_trained.pth"
+    torch.save(model.state_dict(), final_path)
+    print(f"\n✅ Training complete! Final model saved to: {final_path}")
+
+if __name__ == "__main__":
+    train_model()
