@@ -5,3 +5,4 @@ matplotlib
 tqdm
 datasets
 requests
+asteroid
