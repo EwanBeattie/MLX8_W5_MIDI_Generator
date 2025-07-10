@@ -5,7 +5,11 @@ from asteroid.models import BaseModel
 from asteroid.losses import PITLossWrapper, pairwise_neg_sisdr
 from pathlib import Path
 import random
+import warnings
 from tqdm import tqdm
+
+# Suppress the specific numpy tensor creation warning from Asteroid
+warnings.filterwarnings("ignore", message="Creating a tensor from a list of numpy.ndarrays is extremely slow")
 
 def load_model():
     """Load the customized ConvTasNet model for SATB separation."""
@@ -96,7 +100,7 @@ def train_model():
     # Training parameters
     learning_rate = 1e-4
     num_epochs = 10
-    batch_size = 4  # Small batch size for memory efficiency
+    batch_size = 8  # Small batch size for memory efficiency
     
     # Create DataLoaders
     train_loader = DataLoader(
