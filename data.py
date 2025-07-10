@@ -1,46 +1,41 @@
 import requests
+from tqdm import tqdm
 import zipfile
 import os
-from tqdm import tqdm
 
-# URL and target paths
-url = "https://storage.googleapis.com/magentadata/datasets/maestro/v3.0.0/maestro-v3.0.0.zip"
-zip_path = "maestro-v3.0.0.zip"
-extract_path = "maestro-v3.0.0"
+# Corrected Zenodo link for the Choral Singing Dataset
+CHORALSET_URL = "https://zenodo.org/records/2649950/files/ChoralSingingDataset.zip?download=1"
+OUTPUT_ZIP = "ChoralSingingDataset.zip"
+EXTRACT_DIR = "ChoralSingingDataset"
 
-print("🔽 Starting download...")
+def download_choralsinging_dataset():
+    if os.path.exists(EXTRACT_DIR):
+        print(f"[✓] '{EXTRACT_DIR}' folder already exists. Skipping download.")
+        return
 
-# Request with streamed chunks and Content-Length for progress
-with requests.get(url, stream=True) as r:
-    r.raise_for_status()
-    total_size = int(r.headers.get("Content-Length", 0))
-    block_size = 8192
-    progress_bar = tqdm(total=total_size, unit='B', unit_scale=True, desc="Downloading")
+    print(f"[↓] Downloading Choral Singing Dataset...")
+    response = requests.get(CHORALSET_URL, stream=True)
+    total_size = int(response.headers.get("content-length", 0))
+    block_size = 1024
 
-    with open(zip_path, "wb") as f:
-        for chunk in r.iter_content(chunk_size=block_size):
-            f.write(chunk)
-            progress_bar.update(len(chunk))
+    with open(OUTPUT_ZIP, "wb") as f, tqdm(
+        desc=OUTPUT_ZIP,
+        total=total_size,
+        unit="B",
+        unit_scale=True,
+        unit_divisor=1024,
+    ) as bar:
+        for chunk in response.iter_content(chunk_size=block_size):
+            if chunk:
+                f.write(chunk)
+                bar.update(len(chunk))
 
-    progress_bar.close()
+    print(f"[✓] Download complete. Extracting...")
+    with zipfile.ZipFile(OUTPUT_ZIP, "r") as zip_ref:
+        zip_ref.extractall(EXTRACT_DIR)
 
-print(f"✅ Download complete. Saved to '{zip_path}'.")
+    print(f"[✓] Extraction complete. Data saved in: {EXTRACT_DIR}/")
+    os.remove(OUTPUT_ZIP)
 
-# Extract the zip file
-print("📦 Extracting files...")
-with zipfile.ZipFile(zip_path, "r") as zip_ref:
-    zip_ref.extractall(extract_path)
-print(f"✅ Extraction complete. Files extracted to '{extract_path}'.")
-
-# Optional: show size of extracted folder
-def get_dir_size(path):
-    total_size = 0
-    for dirpath, _, filenames in os.walk(path):
-        for f in filenames:
-            fp = os.path.join(dirpath, f)
-            if os.path.isfile(fp):
-                total_size += os.path.getsize(fp)
-    return total_size
-
-size_bytes = get_dir_size(extract_path)
-print(f"📊 Extracted dataset size: {size_bytes / 1e9:.2f} GB")
+if __name__ == "__main__":
+    download_choralsinging_dataset()
