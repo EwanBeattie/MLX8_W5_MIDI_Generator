@@ -7,3 +7,4 @@ datasets
 requests
 asteroid
 torchaudio
+wandb
