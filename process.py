@@ -2,6 +2,7 @@ import torch
 import torchaudio
 from pathlib import Path
 import pickle
+from tqdm import tqdm
 
 def load_and_process_voices():
     """Load, resample, convert to mono and normalize all voice files."""
@@ -79,18 +80,20 @@ def create_chunks(audio_data):
     
     total_combinations = 0
     
+    # Create progress bar for all combinations
+    total_expected_combinations = max_singers ** 4 * len(songs)
+    pbar = tqdm(total=total_expected_combinations, desc="Processing combinations")
+    
     for soprano_singer in range(1, max_singers + 1):
         for alto_singer in range(1, max_singers + 1):
             for tenor_singer in range(1, max_singers + 1):
                 for bass_singer in range(1, max_singers + 1):
                     
                     singer_combo = [soprano_singer, alto_singer, tenor_singer, bass_singer]
-                    total_combinations += 1
-                    
-                    print(f"\nProcessing combination {total_combinations}: S{soprano_singer}A{alto_singer}T{tenor_singer}B{bass_singer}")
                     
                     for song in songs:
-                        print(f"  Creating chunks for {song}")
+                        total_combinations += 1
+                        pbar.set_description(f"S{soprano_singer}A{alto_singer}T{tenor_singer}B{bass_singer} - {song}")
                         
                         # Get the 4 voices for this combination
                         voice_audios = []
@@ -101,11 +104,11 @@ def create_chunks(audio_data):
                             if singer_num in audio_data[song][voice]:
                                 voice_audios.append(audio_data[song][voice][singer_num])
                             else:
-                                print(f"    Warning: {song}_{voice}_{singer_num} not found")
                                 skip_combo = True
                                 break
                         
                         if skip_combo:
+                            pbar.update(1)
                             continue
                         
                         # Create mix
@@ -129,7 +132,9 @@ def create_chunks(audio_data):
                             all_mixed_chunks.append(mixed_chunk)
                             all_source_chunks.append(source_chunks)
                         
-                        print(f"    Created {num_chunks} chunks for {song}")
+                        pbar.update(1)
+    
+    pbar.close()
     
     print(f"\n📊 Total singer combinations processed: {total_combinations}")
     print(f"📊 Expected: {max_singers**4} combinations")
