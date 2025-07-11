@@ -7,6 +7,7 @@ from pathlib import Path
 import random
 import warnings
 from tqdm import tqdm
+import numpy as np
 
 # Suppress the specific numpy tensor creation warning from Asteroid
 warnings.filterwarnings("ignore", message="Creating a tensor from a list of numpy.ndarrays is extremely slow")
@@ -48,39 +49,48 @@ def load_model():
     return model
 
 class SATBDataset(Dataset):
-    """Dataset class for SATB audio chunks."""
+    """Dataset class for SATB audio chunks using NumPy arrays with memory mapping."""
     
-    def __init__(self, file_list, chunks_dir):
-        self.file_list = file_list
-        self.chunks_dir = chunks_dir
+    def __init__(self, indices, data_dir):
+        self.indices = indices
+        self.data_dir = Path(data_dir)
+        
+        # Load data with memory mapping for efficient access
+        self.mixed_chunks = np.load(self.data_dir / "mixed_chunks.npy", mmap_mode='r')
+        self.source_chunks = np.load(self.data_dir / "source_chunks.npy", mmap_mode='r')
+        
+        print(f"Loaded dataset with {len(indices)} chunks")
+        print(f"  Mixed chunks shape: {self.mixed_chunks.shape}")
+        print(f"  Source chunks shape: {self.source_chunks.shape}")
     
     def __len__(self):
-        return len(self.file_list)
+        return len(self.indices)
     
     def __getitem__(self, idx):
-        filename = self.file_list[idx]
-        chunk_data = torch.load(self.chunks_dir / filename)
+        chunk_idx = self.indices[idx]
         
-        # Convert int8 to float
-        mixed = chunk_data['mixed'].float() / 127.0
-        sources = chunk_data['sources'].float() / 127.0
+        # Get data and convert to float tensors
+        mixed = torch.from_numpy(self.mixed_chunks[chunk_idx].copy()).float() / 127.0
+        sources = torch.from_numpy(self.source_chunks[chunk_idx].copy()).float() / 127.0
         
         return mixed, sources
 
 def load_training_data():
-    """Load training and validation data."""
+    """Load training and validation data using NumPy arrays."""
     print("Loading training data...")
     
-    train_files = torch.load("processed_data_compressed/train_split.pt")
-    val_files = torch.load("processed_data_compressed/val_split.pt")
-    chunks_dir = Path("processed_data_compressed/chunks")
+    data_dir = Path("processed_data_compressed")
     
-    print(f"Training chunks: {len(train_files)}")
-    print(f"Validation chunks: {len(val_files)}")
+    # Load indices for train/val splits
+    train_indices = np.load(data_dir / "train_indices.npy")
+    val_indices = np.load(data_dir / "val_indices.npy")
+    
+    print(f"Training chunks: {len(train_indices):,}")
+    print(f"Validation chunks: {len(val_indices):,}")
     
     # Create datasets
-    train_dataset = SATBDataset(train_files, chunks_dir)
-    val_dataset = SATBDataset(val_files, chunks_dir)
+    train_dataset = SATBDataset(train_indices, data_dir)
+    val_dataset = SATBDataset(val_indices, data_dir)
     
     return train_dataset, val_dataset
 
@@ -100,20 +110,22 @@ def train_model():
     # Training parameters
     learning_rate = 1e-4
     num_epochs = 10
-    batch_size = 8  # Small batch size for memory efficiency
+    batch_size = 16  # Increased batch size for better GPU utilization
     
     # Create DataLoaders
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
         shuffle=True, 
-        num_workers=0  # Set to 0 to avoid multiprocessing issues
+        num_workers=4,  # Use multiple workers for faster data loading
+        pin_memory=True  # Speed up CPU->GPU transfer
     )
     val_loader = DataLoader(
         val_dataset, 
         batch_size=batch_size, 
         shuffle=False, 
-        num_workers=0
+        num_workers=2,  # Fewer workers for validation
+        pin_memory=True
     )
     
     # Optimizer and loss
@@ -177,11 +189,10 @@ def train_model():
         print(f"   Train Loss: {avg_train_loss:.4f}")
         print(f"   Val Loss: {avg_val_loss:.4f}")
         
-        # Save checkpoint every few epochs
-        if (epoch + 1) % 2 == 0:
-            checkpoint_path = f"checkpoints/convtasnet_satb_epoch_{epoch + 1}.pth"
-            torch.save(model.state_dict(), checkpoint_path)
-            print(f"   💾 Saved checkpoint: {checkpoint_path}")
+        # Save checkpoint every epoch
+        checkpoint_path = f"checkpoints/convtasnet_satb_epoch_{epoch + 1}.pth"
+        torch.save(model.state_dict(), checkpoint_path)
+        print(f"   💾 Saved checkpoint: {checkpoint_path}")
     
     # Save final model
     final_path = "checkpoints/convtasnet_satb_trained.pth"
