@@ -3,6 +3,7 @@ import torchaudio
 from pathlib import Path
 import pickle
 from tqdm import tqdm
+import gc
 
 def load_and_process_voices():
     """Load, resample, convert to mono and normalize all voice files."""
@@ -92,6 +93,32 @@ def create_chunks(audio_data):
                     singer_combo = [soprano_singer, alto_singer, tenor_singer, bass_singer]
                     
                     for song in songs:
+                        # Safety check: Monitor GPU memory before processing
+                        if not check_gpu_memory(threshold=0.8):
+                            print(f"🛑 Stopping due to high GPU memory usage")
+                            print(f"   Last combination: S{soprano_singer}A{alto_singer}T{tenor_singer}B{bass_singer} - {song}")
+                            pbar.close()
+                            
+                            # Save what we have so far
+                            if all_mixed_chunks:
+                                print(f"💾 Saving {len(all_mixed_chunks)} chunks processed so far...")
+                                mixed_chunks = torch.stack(all_mixed_chunks)
+                                source_chunks = torch.stack(all_source_chunks)
+                                
+                                chunks_data = {
+                                    'mixed': mixed_chunks,
+                                    'sources': source_chunks,
+                                    'count': len(all_mixed_chunks)
+                                }
+                                
+                                chunks_file = "chunks_partial.pkl"
+                                with open(chunks_file, 'wb') as f:
+                                    pickle.dump(chunks_data, f)
+                                print(f"💾 Partial results saved to: {chunks_file}")
+                                return chunks_data
+                            else:
+                                return {'mixed': torch.empty(0), 'sources': torch.empty(0), 'count': 0}
+                        
                         total_combinations += 1
                         pbar.set_description(f"S{soprano_singer}A{alto_singer}T{tenor_singer}B{bass_singer} - {song}")
                         
@@ -132,6 +159,11 @@ def create_chunks(audio_data):
                             all_mixed_chunks.append(mixed_chunk)
                             all_source_chunks.append(source_chunks)
                         
+                        # Clear GPU cache after each combination
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        gc.collect()
+                        
                         pbar.update(1)
     
     pbar.close()
@@ -158,6 +190,27 @@ def create_chunks(audio_data):
     print(f"💾 Saved chunks to: {chunks_file}")
     
     return chunks_data
+
+def check_gpu_memory(threshold=0.8):
+    """Check GPU memory usage and return True if safe to continue."""
+    if torch.cuda.is_available():
+        memory_allocated = torch.cuda.memory_allocated()
+        memory_reserved = torch.cuda.memory_reserved()
+        max_memory = torch.cuda.max_memory_allocated()
+        
+        # Get total GPU memory (approximation)
+        torch.cuda.empty_cache()
+        total_memory = torch.cuda.get_device_properties(0).total_memory
+        
+        usage_ratio = memory_reserved / total_memory
+        
+        if usage_ratio > threshold:
+            print(f"⚠️  GPU memory usage: {usage_ratio:.1%} (above {threshold:.0%} threshold)")
+            print(f"   Reserved: {memory_reserved / 1e9:.2f} GB / {total_memory / 1e9:.2f} GB")
+            return False
+        
+        return True
+    return True  # If no GPU, always continue
 
 if __name__ == "__main__":
     audio_data = load_and_process_voices()
