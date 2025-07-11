@@ -64,7 +64,7 @@ def load_and_process_voices():
     return processed_audio
 
 def create_chunks(audio_data):
-    """Create chunks for all songs, keeping same singer numbers together."""
+    """Create chunks for all songs with all combinations of singers."""
     
     chunk_duration = 4.0  # seconds
     target_sr = 8000
@@ -77,49 +77,62 @@ def create_chunks(audio_data):
     all_mixed_chunks = []
     all_source_chunks = []
     
-    for singer_num in range(1, max_singers + 1):
-        print(f"\nProcessing singer combination {singer_num}")
-        
-        for song in songs:
-            print(f"  Creating chunks for {song} with singer {singer_num}")
-            
-            # Get the 4 voices for this combination
-            voice_audios = []
-            skip_combo = False
-            
-            for voice in voices:
-                if singer_num in audio_data[song][voice]:
-                    voice_audios.append(audio_data[song][voice][singer_num])
-                else:
-                    print(f"    Warning: {song}_{voice}_{singer_num} not found")
-                    skip_combo = True
-                    break
-            
-            if skip_combo:
-                continue
-            
-            # Create mix
-            mixed = sum(voice_audios)
-            mixed = mixed / torch.max(torch.abs(mixed))
-            
-            # Create all possible chunks for this combination
-            min_length = len(voice_audios[0])  # All are same length now
-            num_chunks = (min_length - chunk_samples) // chunk_samples + 1
-            
-            for chunk_idx in range(num_chunks):
-                start = chunk_idx * chunk_samples
-                end = start + chunk_samples
-                
-                if end > min_length:
-                    break
+    total_combinations = 0
+    
+    for soprano_singer in range(1, max_singers + 1):
+        for alto_singer in range(1, max_singers + 1):
+            for tenor_singer in range(1, max_singers + 1):
+                for bass_singer in range(1, max_singers + 1):
                     
-                mixed_chunk = mixed[start:end]
-                source_chunks = torch.stack([audio[start:end] for audio in voice_audios])
-                
-                all_mixed_chunks.append(mixed_chunk)
-                all_source_chunks.append(source_chunks)
-            
-            print(f"    Created {num_chunks} chunks for {song}")
+                    singer_combo = [soprano_singer, alto_singer, tenor_singer, bass_singer]
+                    total_combinations += 1
+                    
+                    print(f"\nProcessing combination {total_combinations}: S{soprano_singer}A{alto_singer}T{tenor_singer}B{bass_singer}")
+                    
+                    for song in songs:
+                        print(f"  Creating chunks for {song}")
+                        
+                        # Get the 4 voices for this combination
+                        voice_audios = []
+                        skip_combo = False
+                        
+                        for i, voice in enumerate(voices):
+                            singer_num = singer_combo[i]
+                            if singer_num in audio_data[song][voice]:
+                                voice_audios.append(audio_data[song][voice][singer_num])
+                            else:
+                                print(f"    Warning: {song}_{voice}_{singer_num} not found")
+                                skip_combo = True
+                                break
+                        
+                        if skip_combo:
+                            continue
+                        
+                        # Create mix
+                        mixed = sum(voice_audios)
+                        mixed = mixed / torch.max(torch.abs(mixed))
+                        
+                        # Create all possible chunks for this combination
+                        min_length = len(voice_audios[0])  # All are same length now
+                        num_chunks = (min_length - chunk_samples) // chunk_samples + 1
+                        
+                        for chunk_idx in range(num_chunks):
+                            start = chunk_idx * chunk_samples
+                            end = start + chunk_samples
+                            
+                            if end > min_length:
+                                break
+                                
+                            mixed_chunk = mixed[start:end]
+                            source_chunks = torch.stack([audio[start:end] for audio in voice_audios])
+                            
+                            all_mixed_chunks.append(mixed_chunk)
+                            all_source_chunks.append(source_chunks)
+                        
+                        print(f"    Created {num_chunks} chunks for {song}")
+    
+    print(f"\n📊 Total singer combinations processed: {total_combinations}")
+    print(f"📊 Expected: {max_singers**4} combinations")
     
     # Stack into single tensors for fast indexing
     mixed_chunks = torch.stack(all_mixed_chunks)  # Shape: [total_chunks, 32000]
