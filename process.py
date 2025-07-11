@@ -44,6 +44,66 @@ def load_and_process_voices():
     
     return processed_audio
 
+def create_chunks(audio_data):
+    """Create chunks for first song, singer 1 from each voice, first 5 chunks only."""
+    
+    chunk_duration = 4.0  # seconds
+    target_sr = 8000
+    chunk_samples = int(chunk_duration * target_sr)
+    
+    # Use first song and singer 1 from each voice
+    song = "ER"
+    voices = ["soprano", "alto", "tenor", "bass"]
+    singer_num = 1
+    
+    print(f"Creating chunks for {song} with singer {singer_num}")
+    
+    # Get the 4 voices for this combination
+    voice_audios = []
+    for voice in voices:
+        if singer_num in audio_data[song][voice]:
+            voice_audios.append(audio_data[song][voice][singer_num])
+        else:
+            print(f"  Warning: {song}_{voice}_{singer_num} not found")
+            return []
+    
+    # Find minimum length and truncate all to same size
+    min_length = min(len(audio) for audio in voice_audios)
+    voice_audios = [audio[:min_length] for audio in voice_audios]
+    
+    # Create mix
+    mixed = sum(voice_audios)
+    mixed = mixed / torch.max(torch.abs(mixed))
+    
+    # Create chunks (only first 5)
+    chunks = []
+    max_chunks = 5
+    
+    for chunk_idx in range(max_chunks):
+        start = chunk_idx * chunk_samples
+        end = start + chunk_samples
+        
+        if end > min_length:
+            break
+            
+        mixed_chunk = mixed[start:end]
+        source_chunks = torch.stack([audio[start:end] for audio in voice_audios])
+        
+        chunks.append({
+            'mixed': mixed_chunk,
+            'sources': source_chunks,
+            'chunk_idx': chunk_idx
+        })
+        
+        print(f"  Chunk {chunk_idx}: {mixed_chunk.shape[0]} samples")
+    
+    return chunks
+
 if __name__ == "__main__":
     audio_data = load_and_process_voices()
     print("✅ All audio files loaded and processed")
+    
+    chunks = create_chunks(audio_data)
+    print(f"✅ Created {len(chunks)} chunks")
+
+
