@@ -1,6 +1,7 @@
 import torch
 from asteroid.models import BaseModel
 import os
+from pathlib import Path
 
 def get_satb_model():
     """Load and configure ConvTasNet model for SATB separation."""
@@ -10,6 +11,9 @@ def get_satb_model():
     # Confirm current output layer
     old_output = model.masker.mask_net[1]  # The final Conv1d layer
     print(f"Original output layer: {old_output}")
+
+    # Update n_src parameter for 4 sources (SATB) - MUST be set before layer modification
+    model.masker.n_src = 4
 
     # Calculate new output channels for 4 sources
     # It was originally 2 × 512 → now 4 × 512
@@ -25,7 +29,15 @@ def get_satb_model():
         padding=old_output.padding[0],
         bias=old_output.bias is not None
     )
+    
+    # Initialize new layer weights
     torch.nn.init.xavier_uniform_(model.masker.mask_net[1].weight)
+    
+    # Load initial weights if available
+    checkpoint_path = "checkpoints/convtasnet_satb_init.pth"
+    if Path(checkpoint_path).exists():
+        model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
+        print(f"✅ Loaded initial weights from {checkpoint_path}")
     
     return model
 
