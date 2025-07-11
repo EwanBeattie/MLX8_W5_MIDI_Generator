@@ -12,7 +12,7 @@ def load_and_process_voices():
     
     songs = ["ER", "LI", "ND"]
     voices = ["soprano", "alto", "tenor", "bass"]
-    max_singers = 4
+    max_singers = 2
     
     # Dictionary to store all processed audio
     processed_audio = {}
@@ -73,7 +73,7 @@ def create_chunks(audio_data):
     
     songs = ["ER", "LI", "ND"]
     voices = ["soprano", "alto", "tenor", "bass"]
-    max_singers = 4
+    max_singers = 2  # Reduced from 4 to 2 - uses only first 2 singers per voice
     
     all_mixed_chunks = []
     all_source_chunks = []
