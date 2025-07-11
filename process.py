@@ -5,20 +5,22 @@ import pickle
 from tqdm import tqdm
 import gc
 
+# Global constants
+DATA_DIR = Path("ChoralSingingDataset/ChoralSingingDataset")
+TARGET_SR = 8000
+CHUNK_DURATION = 4.0  # seconds
+CHUNK_SAMPLES = int(CHUNK_DURATION * TARGET_SR)
+SONGS = ["ER", "LI", "ND"]
+VOICES = ["soprano", "alto", "tenor", "bass"]
+MAX_SINGERS = 3
+
 def load_and_process_voices():
     """Load, resample, convert to mono and normalize all voice files."""
-    
-    data_dir = Path("ChoralSingingDataset/ChoralSingingDataset")
-    target_sr = 8000
-    
-    songs = ["ER", "LI", "ND"]
-    voices = ["soprano", "alto", "tenor", "bass"]
-    max_singers = 2
     
     # Dictionary to store all processed audio
     processed_audio = {}
     
-    for song in songs:
+    for song in SONGS:
         processed_audio[song] = {}
         print(f"Processing song: {song}")
         
@@ -26,11 +28,11 @@ def load_and_process_voices():
         song_audios = {}
         all_lengths = []
         
-        for voice in voices:
+        for voice in VOICES:
             song_audios[voice] = {}
             
-            for singer_num in range(1, max_singers + 1):
-                audio_file = data_dir / f"CSD_{song}_{voice}_{singer_num}.wav"
+            for singer_num in range(1, MAX_SINGERS + 1):
+                audio_file = DATA_DIR / f"CSD_{song}_{voice}_{singer_num}.wav"
                 
                 if not audio_file.exists():
                     print(f"  Warning: {audio_file} not found")
@@ -38,8 +40,8 @@ def load_and_process_voices():
                 
                 # Load and resample
                 waveform, orig_sr = torchaudio.load(audio_file)
-                if orig_sr != target_sr:
-                    resampler = torchaudio.transforms.Resample(orig_sr, target_sr)
+                if orig_sr != TARGET_SR:
+                    resampler = torchaudio.transforms.Resample(orig_sr, TARGET_SR)
                     waveform = resampler(waveform)
                 
                 # Convert to mono and normalize
@@ -56,7 +58,7 @@ def load_and_process_voices():
             
             # Second pass: truncate all to same length and store
             processed_audio[song] = {}
-            for voice in voices:
+            for voice in VOICES:
                 processed_audio[song][voice] = {}
                 for singer_num in song_audios[voice]:
                     truncated = song_audios[voice][singer_num][:min_length]
@@ -68,31 +70,23 @@ def load_and_process_voices():
 def create_chunks(audio_data):
     """Create chunks for all songs with all combinations of singers."""
     
-    chunk_duration = 4.0  # seconds
-    target_sr = 8000
-    chunk_samples = int(chunk_duration * target_sr)
-    
-    songs = ["ER", "LI", "ND"]
-    voices = ["soprano", "alto", "tenor", "bass"]
-    max_singers = 2  # Reduced from 4 to 2 - uses only first 2 singers per voice
-    
     all_mixed_chunks = []
     all_source_chunks = []
     
     total_combinations = 0
     
     # Create progress bar for all combinations
-    total_expected_combinations = max_singers ** 4 * len(songs)
+    total_expected_combinations = MAX_SINGERS ** 4 * len(SONGS)
     pbar = tqdm(total=total_expected_combinations, desc="Processing combinations")
     
-    for soprano_singer in range(1, max_singers + 1):
-        for alto_singer in range(1, max_singers + 1):
-            for tenor_singer in range(1, max_singers + 1):
-                for bass_singer in range(1, max_singers + 1):
+    for soprano_singer in range(1, MAX_SINGERS + 1):
+        for alto_singer in range(1, MAX_SINGERS + 1):
+            for tenor_singer in range(1, MAX_SINGERS + 1):
+                for bass_singer in range(1, MAX_SINGERS + 1):
                     
                     singer_combo = [soprano_singer, alto_singer, tenor_singer, bass_singer]
                     
-                    for song in songs:
+                    for song in SONGS:
                         # Safety check: Monitor GPU memory before processing
                         if not check_gpu_memory(threshold=0.8):
                             print(f"🛑 Stopping due to high GPU memory usage")
@@ -126,7 +120,7 @@ def create_chunks(audio_data):
                         voice_audios = []
                         skip_combo = False
                         
-                        for i, voice in enumerate(voices):
+                        for i, voice in enumerate(VOICES):
                             singer_num = singer_combo[i]
                             if singer_num in audio_data[song][voice]:
                                 voice_audios.append(audio_data[song][voice][singer_num])
@@ -144,11 +138,11 @@ def create_chunks(audio_data):
                         
                         # Create all possible chunks for this combination
                         min_length = len(voice_audios[0])  # All are same length now
-                        num_chunks = (min_length - chunk_samples) // chunk_samples + 1
+                        num_chunks = (min_length - CHUNK_SAMPLES) // CHUNK_SAMPLES + 1
                         
                         for chunk_idx in range(num_chunks):
-                            start = chunk_idx * chunk_samples
-                            end = start + chunk_samples
+                            start = chunk_idx * CHUNK_SAMPLES
+                            end = start + CHUNK_SAMPLES
                             
                             if end > min_length:
                                 break
@@ -169,7 +163,7 @@ def create_chunks(audio_data):
     pbar.close()
     
     print(f"\n📊 Total singer combinations processed: {total_combinations}")
-    print(f"📊 Expected: {max_singers**4} combinations")
+    print(f"📊 Expected: {MAX_SINGERS**4} combinations")
     
     # Stack into single tensors for fast indexing
     mixed_chunks = torch.stack(all_mixed_chunks)  # Shape: [total_chunks, 32000]
