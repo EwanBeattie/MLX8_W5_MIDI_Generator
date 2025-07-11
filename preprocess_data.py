@@ -30,10 +30,23 @@ def preprocess_satb_data_efficient():
     # Use all 4 singers per voice for maximum combinations
     max_singers_to_use = 4  # This gives 256 combinations per song
     
-    # Pre-calculate total chunks to allocate arrays
-    print("Calculating total chunks needed...")
-    total_chunks = 0
-    chunk_info = []  # Store metadata for each chunk
+    # Estimate total chunks (we'll resize arrays if needed)
+    # Assume average audio length of ~3 minutes = 180 seconds at 8kHz = 1.44M samples
+    # With 4-second chunks, that's ~45 chunks per combination
+    estimated_chunks_per_combo = 45
+    max_combinations = len(songs) * (max_singers_to_use ** 4)  # 3 * 256 = 768
+    estimated_total_chunks = max_combinations * estimated_chunks_per_combo
+    
+    print(f"Estimated total chunks: {estimated_total_chunks:,}")
+    print("Starting processing (will resize arrays if needed)...")
+    
+    # Pre-allocate NumPy arrays with estimated size
+    mixed_chunks_list = []
+    source_chunks_list = []
+    
+    # Process and collect chunks
+    total_combinations = len(songs) * (max_singers_to_use ** 4)
+    pbar = tqdm(total=total_combinations, desc="Processing combinations")
     
     for song in songs:
         for soprano_singer in range(1, max_singers_to_use + 1):
@@ -42,118 +55,101 @@ def preprocess_satb_data_efficient():
                     for bass_singer in range(1, max_singers_to_use + 1):
                         
                         singer_combo = [soprano_singer, alto_singer, tenor_singer, bass_singer]
+                        pbar.set_description(f"Song {song}: S{soprano_singer}A{alto_singer}T{tenor_singer}B{bass_singer}")
                         
-                        # Check if all files exist
-                        all_exist = True
-                        min_length = float('inf')
+                        # Load all 4 voices for this combination
+                        voice_audios = []
+                        skip_combo = False
                         
                         for i, voice in enumerate(voices):
                             singer_num = singer_combo[i]
                             audio_file = data_dir / f"CSD_{song}_{voice}_{singer_num}.wav"
                             
                             if not audio_file.exists():
-                                all_exist = False
+                                skip_combo = True
                                 break
                             
-                            # Quick length check
-                            info = torchaudio.info(audio_file)
-                            length_samples = int(info.num_frames * target_sr / info.sample_rate)
-                            min_length = min(min_length, length_samples)
+                            # Load and resample
+                            waveform, orig_sr = torchaudio.load(audio_file)
+                            if orig_sr != target_sr:
+                                resampler = torchaudio.transforms.Resample(orig_sr, target_sr)
+                                waveform = resampler(waveform)
+                            
+                            # Convert to mono and normalize
+                            waveform = torch.mean(waveform, dim=0)
+                            waveform = waveform / torch.max(torch.abs(waveform))
+                            voice_audios.append(waveform)
                         
-                        if all_exist and min_length >= chunk_samples:
-                            chunks_for_combo = (min_length - chunk_samples) // chunk_samples + 1
-                            total_chunks += chunks_for_combo
-                            chunk_info.append((song, singer_combo, chunks_for_combo))
-    
-    print(f"Total chunks to process: {total_chunks:,}")
-    
-    # Pre-allocate NumPy arrays
-    mixed_chunks = np.empty((total_chunks, chunk_samples), dtype=np.int8)
-    source_chunks = np.empty((total_chunks, 4, chunk_samples), dtype=np.int8)
-    
-    # Process and fill arrays
-    chunk_idx = 0
-    total_combinations = len(chunk_info)
-    pbar = tqdm(total=total_combinations, desc="Processing combinations")
-    
-    for song, singer_combo, chunks_for_combo in chunk_info:
-        soprano_singer, alto_singer, tenor_singer, bass_singer = singer_combo
-        pbar.set_description(f"Song {song}: S{soprano_singer}A{alto_singer}T{tenor_singer}B{bass_singer}")
-        
-        # Load all 4 voices for this combination
-        voice_audios = []
-        for i, voice in enumerate(voices):
-            singer_num = singer_combo[i]
-            audio_file = data_dir / f"CSD_{song}_{voice}_{singer_num}.wav"
-            
-            # Load and resample
-            waveform, orig_sr = torchaudio.load(audio_file)
-            if orig_sr != target_sr:
-                resampler = torchaudio.transforms.Resample(orig_sr, target_sr)
-                waveform = resampler(waveform)
-            
-            # Convert to mono and normalize
-            waveform = torch.mean(waveform, dim=0)
-            waveform = waveform / torch.max(torch.abs(waveform))
-            voice_audios.append(waveform)
-        
-        # Find minimum length
-        min_length = min(len(audio) for audio in voice_audios)
-        voice_audios = [audio[:min_length] for audio in voice_audios]
-        
-        # Create mix
-        mixed = sum(voice_audios)
-        mixed = mixed / torch.max(torch.abs(mixed))
-        
-        # Process chunks and store in pre-allocated arrays
-        chunk_count = 0
-        for start in range(0, min_length - chunk_samples + 1, chunk_samples):
-            end = start + chunk_samples
-            
-            mixed_chunk = mixed[start:end]
-            source_chunks_tensor = torch.stack([audio[start:end] for audio in voice_audios])
-            
-            # Convert to int8 for smaller storage
-            mixed_int8 = (mixed_chunk * 127).clamp(-127, 127).to(torch.int8)
-            sources_int8 = (source_chunks_tensor * 127).clamp(-127, 127).to(torch.int8)
-            
-            # Store in pre-allocated arrays
-            mixed_chunks[chunk_idx] = mixed_int8.numpy()
-            source_chunks[chunk_idx] = sources_int8.numpy()
-            
-            # Save quality samples (skip first chunk as it's often blank)
-            if not samples_saved and chunk_count == 1:  # Use second chunk
-                print(f"  Saving quality samples for {song}...")
-                
-                # Convert back to float for audio saving
-                mixed_float = mixed_int8.float() / 127.0
-                sources_float = sources_int8.float() / 127.0
-                
-                # Save mixed audio
-                torchaudio.save(
-                    samples_dir / f"{song}_mixed.wav",
-                    mixed_float.unsqueeze(0), target_sr
-                )
-                
-                # Save individual voices
-                voice_names = ["soprano", "alto", "tenor", "bass"]
-                for i, voice_name in enumerate(voice_names):
-                    torchaudio.save(
-                        samples_dir / f"{song}_{voice_name}.wav",
-                        sources_float[i].unsqueeze(0), target_sr
-                    )
-                
-                samples_saved = True
-            
-            chunk_idx += 1
-            chunk_count += 1
-        
-        # Clear memory after each combination
-        del voice_audios, mixed
-        gc.collect()
-        pbar.update(1)
+                        if skip_combo:
+                            pbar.update(1)
+                            continue
+                        
+                        # Find minimum length
+                        min_length = min(len(audio) for audio in voice_audios)
+                        voice_audios = [audio[:min_length] for audio in voice_audios]
+                        
+                        # Create mix
+                        mixed = sum(voice_audios)
+                        mixed = mixed / torch.max(torch.abs(mixed))
+                        
+                        # Process chunks and store in lists
+                        chunk_count = 0
+                        for start in range(0, min_length - chunk_samples + 1, chunk_samples):
+                            end = start + chunk_samples
+                            
+                            mixed_chunk = mixed[start:end]
+                            source_chunks_tensor = torch.stack([audio[start:end] for audio in voice_audios])
+                            
+                            # Convert to int8 for smaller storage
+                            mixed_int8 = (mixed_chunk * 127).clamp(-127, 127).to(torch.int8)
+                            sources_int8 = (source_chunks_tensor * 127).clamp(-127, 127).to(torch.int8)
+                            
+                            # Store in lists
+                            mixed_chunks_list.append(mixed_int8.numpy())
+                            source_chunks_list.append(sources_int8.numpy())
+                            
+                            # Save quality samples (skip first chunk as it's often blank)
+                            if not samples_saved and chunk_count == 1:  # Use second chunk
+                                print(f"  Saving quality samples for {song}...")
+                                
+                                # Convert back to float for audio saving
+                                mixed_float = mixed_int8.float() / 127.0
+                                sources_float = sources_int8.float() / 127.0
+                                
+                                # Save mixed audio
+                                torchaudio.save(
+                                    samples_dir / f"{song}_mixed.wav",
+                                    mixed_float.unsqueeze(0), target_sr
+                                )
+                                
+                                # Save individual voices
+                                voice_names = ["soprano", "alto", "tenor", "bass"]
+                                for i, voice_name in enumerate(voice_names):
+                                    torchaudio.save(
+                                        samples_dir / f"{song}_{voice_name}.wav",
+                                        sources_float[i].unsqueeze(0), target_sr
+                                    )
+                                
+                                samples_saved = True
+                            
+                            chunk_count += 1
+                        
+                        # Clear memory after each combination
+                        del voice_audios, mixed
+                        gc.collect()
+                        pbar.update(1)
     
     pbar.close()
+    
+    # Convert lists to NumPy arrays
+    print(f"Converting {len(mixed_chunks_list):,} chunks to NumPy arrays...")
+    mixed_chunks = np.array(mixed_chunks_list, dtype=np.int8)
+    source_chunks = np.array(source_chunks_list, dtype=np.int8)
+    total_chunks = len(mixed_chunks_list)
+    
+    # Clear lists to free memory
+    del mixed_chunks_list, source_chunks_list
+    gc.collect()
     
     # Save NumPy arrays
     print("Saving NumPy arrays...")

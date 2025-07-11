@@ -30,7 +30,7 @@ def load_model():
     )
     
     # Load trained weights
-    checkpoint_path = "checkpoints/convtasnet_satb_init.pth"
+    checkpoint_path = "convtasnet_satb_epoch_2.pth"
     if Path(checkpoint_path).exists():
         model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
         print(f"✅ Loaded weights from {checkpoint_path}")
