@@ -1,6 +1,7 @@
 import torch
 import torchaudio
 from pathlib import Path
+import pickle
 
 def load_and_process_voices():
     """Load, resample, convert to mono and normalize all voice files."""
@@ -63,63 +64,82 @@ def load_and_process_voices():
     return processed_audio
 
 def create_chunks(audio_data):
-    """Create chunks for first song, singer 1 from each voice, first 5 chunks only."""
+    """Create chunks for all songs, keeping same singer numbers together."""
     
     chunk_duration = 4.0  # seconds
     target_sr = 8000
     chunk_samples = int(chunk_duration * target_sr)
     
-    # Use first song and singer 1 from each voice
-    song = "ER"
+    songs = ["ER", "LI", "ND"]
     voices = ["soprano", "alto", "tenor", "bass"]
-    singer_num = 1
+    max_singers = 4
     
-    print(f"Creating chunks for {song} with singer {singer_num}")
+    all_mixed_chunks = []
+    all_source_chunks = []
     
-    # Get the 4 voices for this combination
-    voice_audios = []
-    for voice in voices:
-        if singer_num in audio_data[song][voice]:
-            voice_audios.append(audio_data[song][voice][singer_num])
-        else:
-            print(f"  Warning: {song}_{voice}_{singer_num} not found")
-            return []
-    
-    # Create mix
-    mixed = sum(voice_audios)
-    mixed = mixed / torch.max(torch.abs(mixed))
-    
-    # Create chunks (only first 5) - pre-stacked for fast access
-    max_chunks = 5
-    min_length = len(voice_audios[0])  # All are same length now
-    
-    mixed_chunks_list = []
-    source_chunks_list = []
-    
-    for chunk_idx in range(max_chunks):
-        start = chunk_idx * chunk_samples
-        end = start + chunk_samples
+    for singer_num in range(1, max_singers + 1):
+        print(f"\nProcessing singer combination {singer_num}")
         
-        if end > min_length:
-            break
+        for song in songs:
+            print(f"  Creating chunks for {song} with singer {singer_num}")
             
-        mixed_chunk = mixed[start:end]
-        source_chunks = torch.stack([audio[start:end] for audio in voice_audios])
-        
-        mixed_chunks_list.append(mixed_chunk)
-        source_chunks_list.append(source_chunks)
-        
-        print(f"  Chunk {chunk_idx}: {mixed_chunk.shape[0]} samples")
+            # Get the 4 voices for this combination
+            voice_audios = []
+            skip_combo = False
+            
+            for voice in voices:
+                if singer_num in audio_data[song][voice]:
+                    voice_audios.append(audio_data[song][voice][singer_num])
+                else:
+                    print(f"    Warning: {song}_{voice}_{singer_num} not found")
+                    skip_combo = True
+                    break
+            
+            if skip_combo:
+                continue
+            
+            # Create mix
+            mixed = sum(voice_audios)
+            mixed = mixed / torch.max(torch.abs(mixed))
+            
+            # Create all possible chunks for this combination
+            min_length = len(voice_audios[0])  # All are same length now
+            num_chunks = (min_length - chunk_samples) // chunk_samples + 1
+            
+            for chunk_idx in range(num_chunks):
+                start = chunk_idx * chunk_samples
+                end = start + chunk_samples
+                
+                if end > min_length:
+                    break
+                    
+                mixed_chunk = mixed[start:end]
+                source_chunks = torch.stack([audio[start:end] for audio in voice_audios])
+                
+                all_mixed_chunks.append(mixed_chunk)
+                all_source_chunks.append(source_chunks)
+            
+            print(f"    Created {num_chunks} chunks for {song}")
     
     # Stack into single tensors for fast indexing
-    mixed_chunks = torch.stack(mixed_chunks_list)  # Shape: [5, 32000]
-    source_chunks = torch.stack(source_chunks_list)  # Shape: [5, 4, 32000]
+    mixed_chunks = torch.stack(all_mixed_chunks)  # Shape: [total_chunks, 32000]
+    source_chunks = torch.stack(all_source_chunks)  # Shape: [total_chunks, 4, 32000]
     
-    return {
+    print(f"\n✅ Total chunks created: {len(all_mixed_chunks)}")
+    
+    chunks_data = {
         'mixed': mixed_chunks,
         'sources': source_chunks,
-        'count': len(mixed_chunks_list)
+        'count': len(all_mixed_chunks)
     }
+    
+    chunks_file = "chunks.pkl"
+    with open(chunks_file, 'wb') as f:
+        pickle.dump(chunks_data, f)
+    
+    print(f"💾 Saved chunks to: {chunks_file}")
+    
+    return chunks_data
 
 if __name__ == "__main__":
     audio_data = load_and_process_voices()
