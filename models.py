@@ -33,12 +33,6 @@ def get_satb_model():
     # Initialize new layer weights
     torch.nn.init.xavier_uniform_(model.masker.mask_net[1].weight)
     
-    # Load initial weights if available
-    checkpoint_path = "checkpoints/convtasnet_satb_init.pth"
-    if Path(checkpoint_path).exists():
-        model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
-        print(f"✅ Loaded initial weights from {checkpoint_path}")
-    
     return model
 
 # Run when script is executed directly
