@@ -89,6 +89,10 @@ def train():
             torch.save(model.state_dict(), checkpoint_path)
             print(f"  💾 Saved checkpoint: {checkpoint_path}")
 
+    # Save final model
+    final_model_path = "checkpoints/model_final.pth"
+    torch.save(model.state_dict(), final_model_path)
+    print(f"\n💾 Saved final model: {final_model_path}")
 
     print("Training complete!")
     wandb.finish()
