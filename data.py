@@ -1,41 +1,52 @@
-import requests
-from tqdm import tqdm
-import zipfile
-import os
+from torch.utils.data import Dataset, DataLoader
+import pickle
 
-# Corrected Zenodo link for the Choral Singing Dataset
-CHORALSET_URL = "https://zenodo.org/records/2649950/files/ChoralSingingDataset.zip?download=1"
-OUTPUT_ZIP = "ChoralSingingDataset.zip"
-EXTRACT_DIR = "ChoralSingingDataset"
+class SATBDataset(Dataset):
+    """Simple SATB Dataset for loading chunks."""
+    
+    def __init__(self, chunks_data, indices):
+        self.mixed_chunks = chunks_data['mixed']
+        self.source_chunks = chunks_data['sources']
+        self.indices = indices
+    
+    def __len__(self):
+        return len(self.indices)
+    
+    def __getitem__(self, idx):
+        chunk_idx = self.indices[idx]
+        mixed = self.mixed_chunks[chunk_idx]
+        sources = self.source_chunks[chunk_idx]
+        return mixed, sources
 
-def download_choralsinging_dataset():
-    if os.path.exists(EXTRACT_DIR):
-        print(f"[✓] '{EXTRACT_DIR}' folder already exists. Skipping download.")
-        return
-
-    print(f"[↓] Downloading Choral Singing Dataset...")
-    response = requests.get(CHORALSET_URL, stream=True)
-    total_size = int(response.headers.get("content-length", 0))
-    block_size = 1024
-
-    with open(OUTPUT_ZIP, "wb") as f, tqdm(
-        desc=OUTPUT_ZIP,
-        total=total_size,
-        unit="B",
-        unit_scale=True,
-        unit_divisor=1024,
-    ) as bar:
-        for chunk in response.iter_content(chunk_size=block_size):
-            if chunk:
-                f.write(chunk)
-                bar.update(len(chunk))
-
-    print(f"[✓] Download complete. Extracting...")
-    with zipfile.ZipFile(OUTPUT_ZIP, "r") as zip_ref:
-        zip_ref.extractall(EXTRACT_DIR)
-
-    print(f"[✓] Extraction complete. Data saved in: {EXTRACT_DIR}/")
-    os.remove(OUTPUT_ZIP)
-
-if __name__ == "__main__":
-    download_choralsinging_dataset()
+def get_data_loaders(chunks_file="chunks.pkl", batch_size=8):
+    """Load chunks and create train/val DataLoaders."""
+    
+    # Load chunks
+    with open(chunks_file, 'rb') as f:
+        chunks_data = pickle.load(f)
+    
+    total_chunks = chunks_data['count']
+    
+    # Simple 80/10/10 split
+    train_size = int(0.8 * total_chunks)
+    val_size = int(0.1 * total_chunks)
+    
+    train_indices = list(range(train_size))
+    val_indices = list(range(train_size, train_size + val_size))
+    test_indices = list(range(train_size + val_size, total_chunks))
+    
+    # Create datasets
+    train_dataset = SATBDataset(chunks_data, train_indices)
+    val_dataset = SATBDataset(chunks_data, val_indices)
+    test_dataset = SATBDataset(chunks_data, test_indices)
+    
+    # Create dataloaders
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    
+    print(f"Train: {len(train_dataset)} samples")
+    print(f"Val: {len(val_dataset)} samples") 
+    print(f"Test: {len(test_dataset)} samples")
+    
+    return train_loader, val_loader, test_loader
